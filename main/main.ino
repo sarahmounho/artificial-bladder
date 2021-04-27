@@ -10,7 +10,18 @@ const int stepsPerRevolution = 200;
 // Create Instance of Stepper library
 Stepper myStepper(stepsPerRevolution, 12, 11, 10, 9);
 
-// Variable initialization 
+// Pins for LED
+const int red_light_pin= 3;
+const int green_light_pin = 5;
+const int blue_light_pin = 6;
+
+// Pins for button
+const int button = 2;
+
+
+// Variable initialization
+int button_state = 0; // var for reading push button status
+
 const int ADDRESS = 0x08; // Standard address for LD20 Liquid Flow Sensors
 const float SCALE_FACTOR_FLOW = 10.0;
 const float SCALE_FACTOR_TEMP = 200.0;
@@ -27,17 +38,33 @@ double last_micros;
 
 double new_vol = 0.0;
 double old_vol = 0.0;
+double total_vol = 385000; // 385 mL = 385000 uL
+
+int motor_steps = 0;
 
 void open() {
   // step one revolution in one direction:
   Serial.println("Open");
-  myStepper.step(stepsPerRevolution);
+  myStepper.step(1);
+  motor_steps += 1;
+  Serial.print("Motor Steps:");
+  Serial.println(motor_steps);
+  Serial.print("Total Vol: ");
+  Serial.println(totalizer_volume/1000);
+  Serial.print("New Vol: ");
+  Serial.println(new_vol/1000);
+  Serial.print("Old Vol: ");
+  Serial.println(old_vol/1000);
+  
+
 }
 
-void close() {
+void close(int old_vol) {
   // step one revolution in the other direction:
   Serial.println("Close");
-  myStepper.step(-stepsPerRevolution);
+  int steps_close = old_vol / 1000; // convert uL to mL
+  steps_close += 1; // add  1 extra step to remove all the urine
+  myStepper.step(steps_close);
 }
 
 // -----------------------------------------------------------------------------
@@ -55,6 +82,17 @@ void measure_flow(){
 
   sensor_reading = ((float) signed_flow_value) / SCALE_FACTOR_FLOW;
 }
+
+// -----------------------------------------------------------------------------
+// LED routine
+// -----------------------------------------------------------------------------
+void RGB_color(int red_light_value, int green_light_value, int blue_light_value)
+ {
+  analogWrite(red_light_pin, red_light_value);
+  analogWrite(green_light_pin, green_light_value);
+  analogWrite(blue_light_pin, blue_light_value);
+}
+
 // -----------------------------------------------------------------------------
 // Arduino setup routine, just runs once:
 // -----------------------------------------------------------------------------
@@ -64,6 +102,14 @@ void setup() {
   Wire.begin();       // join i2c bus (address optional for master)
   // set the speed at 20 rpm:
   myStepper.setSpeed(20);
+
+  // init LED
+  pinMode(red_light_pin, OUTPUT);
+  pinMode(green_light_pin, OUTPUT);
+  pinMode(blue_light_pin, OUTPUT);
+
+  // init button
+  pinMode(button, INPUT);
 
   do {
     // Soft reset the sensor
@@ -101,25 +147,49 @@ void loop(){
   new_vol = 0.0;
 
   while (true) {
+    // check if user pressed button
+    if (button_state == HIGH) {
+      close(old_vol);
+      // reset volume 
+      old_vol = 0;
+    }
 
     measure_flow();
     last_micros = this_micros;
     this_micros = micros(); // get microseconds since board has been running program
     delta_t = ((this_micros - last_micros)) / 1000000.0 / 60.0 ; // ul/min
     totalizer_volume = totalizer_volume + sensor_reading * delta_t ; // seems to be off by 0.1 ul/min
-    Serial.print("Total Vol: ");
-    Serial.println(totalizer_volume);
-    Serial.print("New Vol: ");
-    Serial.println(new_vol);
+//    Serial.print("Total Vol: ");
+//    Serial.println(totalizer_volume);
+//    Serial.print("New Vol: ");
+//    Serial.println(new_vol);
     
-    if (new_vol >= 100){
+    if (new_vol >= 1000){
         open(); // open 
-        old_vol = old_vol + 100;
-        new_vol = new_vol - 100; 
+        old_vol = old_vol + 1000;
+        new_vol = new_vol - 1000; 
     }
     else{
         new_vol = totalizer_volume - old_vol ; 
+    }
 
+    // notify user <60% full
+    if (old_vol < 0.6*total_vol){
+      RGB_color(0, 255, 0); // Green LED
+    }
+    // notify user 60-90% full
+    else if (old_vol >= 0.6*total_vol && old_vol < 0.9*total_vol){
+      RGB_color(255, 255, 0); // Yellow LED
+    }
+    // notify user 90% full
+    else if (old_vol >= 0.9*total_vol){
+      RGB_color(255, 0, 0); // Red LED
+      // bladder too full force emptying
+      if (old_vol >= 0.95*total_vol){
+        close(old_vol); 
+        // reset volume
+        old_vol = 0;
+      }
     }
     delay(10); // 
   }
